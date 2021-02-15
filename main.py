@@ -33,14 +33,27 @@ def Wikipedia(topic):
     wikipedia.set_lang("cs")
     return wikipedia.summary(topic, sentences=1)
 
+#haha tohle je tak simple ale tak krásně provedený, jsem proud
+#edit poté co jsem zjistil že celý string zní stejně blbě podle toho jaká je teplota, už nejsem proud
+def Temp_classify(tmp):
+    if(tmp < 5 and tmp > -5):
+        return "budou {} stupně".format(tmp)
+    else:
+        return "bude {} stupňů".format(tmp)
+
+def Temp_classifyNow(tmp):
+    if(tmp < 5 and tmp > -5):
+        return "jsou {} stupně".format(tmp)
+    else:
+        return "je {} stupňů".format(tmp)
+    
+
 #načtení konfigurace
 config = configparser.ConfigParser()
 config.read("konfigurace.ini")
 
 #získání lokace pro počasí atd.
 g = geocoder.ip("me")
-print(g.city) #TODO: zpracuj to
-
 
 #inicializace regnozicačních objektů
 r = sr.Recognizer()
@@ -89,14 +102,70 @@ def main():
 
         elif (intent == "weather"):
             body = resp.get("entities").get("day:day")[0].get("body")
+            url = "https://api.openweathermap.org/data/2.5/onecall?lat=%s&lon=%s&appid=%s&units=metric" % (g.lat, g.lng, "b8673c1c6075378467103fc57030a52b")    
+            response = requests.get(url)
+            data = json.loads(response.text)
+
             if("dnes" in body):
-                url = "https://api.openweathermap.org/data/2.5/onecall?lat=%s&lon=%s&appid=%s&units=metric" % (g.lat, g.lng, "b8673c1c6075378467103fc57030a52b")    
-                response = requests.get(url)
-                data = json.loads(response.text)
-                print(data)
+                expression = data.get("daily")[0].get("weather").get("main").lower()
+            elif(body == "zítra"):
+                expression = data.get("daily")[1].get("weather").get("main").lower()
+            elif("teď" in body):
+                expression = data.get("current").get("weather")[0].get("main").lower()
+
+            tSaid_expression = ""
+            nSaid_expression = ""
+            print(expression)
+
+            #teď
+            if(expression == "thunderstorm"):
+                nSaid_expression = "je bouřka"
+            elif(expression == "drizzle"):
+                nSaid_expression = "mrholí"
+            elif(expression == "rain"):
+                nSaid_expression = "prší"
+            elif(expression == "snow"):
+                nSaid_expression = "sněží"
+            elif(expression == "clear"):
+                nSaid_expression = "je slunečno"
+            elif(expression == "clouds"):
+                nSaid_expression = "je zataženo"
+            elif(expression == "mist"):
+                nSaid_expression = "je mhla"
+            elif(expression == "clouds"):
+                nSaid_expression = "je zataženo"
+            elif(expression == "clouds"):
+                nSaid_expression = "je zataženo"
+
+            #dnes
+            if(expression == "thunderstorm"):
+                tSaid_expression = "bouřka"
+            elif(expression == "drizzle"):
+                tSaid_expression = "mrholit"
+            elif(expression == "rain"):
+                tSaid_expression = "pršet"
+            elif(expression == "snow"):
+                tSaid_expression = "sněžit"
+            elif(expression == "clear"):
+                tSaid_expression = "slunečno"
+            elif(expression == "clouds"):
+                tSaid_expression = "zataženo"
+            elif(expression == "mist" or expression == "haze" or expression == "smoke"):
+                tSaid_expression = "mlha"
+
+            if("dnes" in body):
+                #print(data.get("current"))
+                #print(data.get("current").get("weather")[0].get("main"))
+                #print(data)
+                Speak("Dnes bude {} a nejnižší teplota dnes {} a nejvyšší teplota {}".format(tSaid_expression, Temp_classify(round(data.get("daily")[0].get("temp").get("min"))), Temp_classify(round(data.get("daily")[0].get("temp").get("max")))))
 
             elif(body == "zítra"):
-                print("co zítra")
+                Speak("Zítra bude {} a nejnižší teplota {} a nejvyšší teplota {}".format(tSaid_expression, Temp_classify(round(data.get("daily")[1].get("temp").get("min"))), Temp_classify(round(data.get("daily")[1].get("temp").get("max")))))
+
+            elif(body == "teď"):
+                Speak("Momentálně {}, pocitově {} a {}".format(Temp_classifyNow(round(data.get("current").get("temp"))), Temp_classifyNow(round(data.get("current").get("feels_like"))), nSaid_expression))
+
+            break
 
         elif (intent == "reminders"):
             Speak("Na dnes je jediný plán, dej si pořádnýho bonga a rozjebej se ty sračko")
