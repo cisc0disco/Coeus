@@ -7,9 +7,10 @@ from playsound import playsound
 import geocoder
 import configparser
 import requests
-import snowboydecoder
 import signal
 from datetime import datetime
+import snowboydecoder
+from hue_api import HueApi
 
 interrupted = False
 
@@ -47,13 +48,24 @@ def Temp_classifyNow(tmp):
     else:
         return "je {} stupňů".format(tmp)
     
-
 #načtení konfigurace
 config = configparser.ConfigParser()
 config.read("konfigurace.ini")
 
 #získání lokace pro počasí atd.
 g = geocoder.ip("me")
+
+#nastavení hue
+api = HueApi()
+try:
+    api.create_new_user("192.168.0.104")
+    api.save_api_key(cache_file = "hue_token")
+except:
+    api.load_existing(cache_file = "hue_token")
+
+api.fetch_lights()
+
+#print(api.list_lights())
 
 #inicializace regnozicačních objektů
 r = sr.Recognizer()
@@ -74,7 +86,6 @@ client = Wit(str(config["wit"]["Token"]))
 signal.signal(signal.SIGINT, signal_handler)
 
 def main():
-    snowboydecoder.play_audio_file
     playsound("./audio/activated.mp3")
     while(not interrupted):
         try:    
@@ -170,6 +181,25 @@ def main():
         elif (intent == "reminders"):
             Speak("Na dnes je jediný plán, dej si pořádnýho bonga a rozjebej se ty sračko")
             playsound("./audio/bong.mp3")
+
+        elif (intent == "light"):
+            body = resp.get("entities").get("state:state")[0].get("body")
+            if (body.lower() == "zapni"):
+                api.turn_on()
+                break
+            elif (body.lower() == "vypni"):
+                api.turn_off()
+                break
+            else:
+                api.toggle_on()
+                break
+
+        elif (intent == "set_light"):
+            try:
+                body = resp.get("entities").get("percent:percent")[0].get("body")
+            except:
+                print("error")
+            api.set_brightness(body.replace("%", ""))
 
         elif (intent == "time"):
             Speak("Je "+str(datetime.now().hour)+"hodin a "+str(datetime.now().minute) + "minut")
