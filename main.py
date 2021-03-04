@@ -8,9 +8,10 @@ import geocoder
 import configparser
 import requests
 import signal
-from datetime import datetime
+from datetime import datetime, timedelta
 import snowboydecoder
 from hue_api import HueApi
+from bs4 import BeautifulSoup
 
 interrupted = False
 
@@ -34,23 +35,63 @@ def Wikipedia(topic):
     wikipedia.set_lang("cs")
     return wikipedia.summary(topic, sentences=1)
 
-#haha tohle je tak simple ale tak krásně provedený, jsem proud
-#edit poté co jsem zjistil že celý string zní stejně blbě podle toho jaká je teplota, už nejsem proud
 def Temp_classify(tmp):
-    if(tmp < 5 and tmp > -5):
+
+    if(tmp == 1 or tmp == -1):
+        return "bude {} stupeň".format(tmp)
+
+    elif(tmp < 5 and tmp > -5):
         return "budou {} stupně".format(tmp)
+
     else:
         return "bude {} stupňů".format(tmp)
 
 def Temp_classifyNow(tmp):
-    if(tmp < 5 and tmp > -5):
+
+    if(tmp == 1 or tmp == -1):
+        return "je {} stupeň".format(tmp)
+    
+    elif(tmp < 5 and tmp > -5):
         return "jsou {} stupně".format(tmp)
+
     else:
         return "je {} stupňů".format(tmp)
     
+#deklarace proměnných
+
+interrupted = False
+azure_key = ""
+azure_end = ""
+wit_key = ""
+weather_key = ""
+bridge_ip = ""
+voice = ""
+
+
 #načtení konfigurace
 config = configparser.ConfigParser()
-config.read("konfigurace.ini")
+config.read("login.ini")
+
+def _config():
+
+    global azure_key
+    global azure_end
+    global wit_key
+    global weather_key
+    global bridge_ip
+    global voice
+
+    headers = {"username":config["login"]["Username"], "password":config["login"]["Password"]}
+    r = requests.post("http://127.0.0.1:8000/api/", data=headers)
+
+    azure_key = r.json()["azure_key"]
+    azure_end = r.json()["azure_end"]
+    wit_key = r.json()["wit_key"]
+    weather_key = r.json()["weather_key"]
+    bridge_ip = r.json()["bridge_ip"]
+    voice = r.json()["voice"]
+
+_config()
 
 #získání lokace pro počasí atd.
 g = geocoder.ip("me")
@@ -58,22 +99,23 @@ g = geocoder.ip("me")
 #nastavení hue
 api = HueApi()
 try:
-    api.create_new_user("192.168.0.104")
+    api.create_new_user(bridge_ip)
     api.save_api_key(cache_file = "hue_token")
 except:
     api.load_existing(cache_file = "hue_token")
 
 api.fetch_lights()
 
-#print(api.list_lights())
-
 #inicializace regnozicačních objektů
 r = sr.Recognizer()
 m = sr.Microphone()
 
 #nastavení azure
-speech_config = speechsdk.SpeechConfig(endpoint=config["azure"]["Endpoint"], subscription=config["azure"]["Subscription"])
-speech_config.speech_synthesis_voice_name = "cs-CZ-AntoninNeural"
+speech_config = speechsdk.SpeechConfig(endpoint=azure_end, subscription=azure_key)
+if(voice == "M"):
+    speech_config.speech_synthesis_voice_name = "cs-CZ-AntoninNeural"
+else:
+    speech_config.speech_synthesis_voice_name = "cs-CZ-VlastaNeural"
 speech_config.set_speech_synthesis_output_format(speechsdk.SpeechSynthesisOutputFormat(21))
 
 synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config)
@@ -81,11 +123,12 @@ synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config)
 #oprava mikrofonů se šumem
 with m as source: r.adjust_for_ambient_noise(source)
 
-client = Wit(str(config["wit"]["Token"]))
+client = Wit(str(wit_key))
 
 signal.signal(signal.SIGINT, signal_handler)
 
 def main():
+    _config()
     playsound("./audio/activated.mp3")
     while(not interrupted):
         try:    
@@ -95,32 +138,38 @@ def main():
             playsound("./audio/disabled.mp3")
             break
 
-        if(intent == "stop" or intent == "přestaň"):
+        if(intent == "stop"):
             playsound("./audio/disabled.mp3")
             break
-            #TODO: opravit, přidat intent na wit
 
         elif (intent == "wikipedia"):
-            body = resp.get("entities").get("wit$wikipedia_search_query:wikipedia_search_query")[0].get("body")
             try:
+                body = resp.get("entities").get("wit$wikipedia_search_query:wikipedia_search_query")[0].get("body")
                 Speak(Wikipedia(body))
-            except:
-                Speak("Omlouvám se, ale termín nebyl nalezen")
+            except Exception as e:
+                if("may refer to:" in str(e)):
+                    _e = str(e)
+                    Speak("Možná jste měli na mysli " + _e[_e.find("may refer to:") + len("may refer to:")+1:_e.rfind(body)])
+                else:
+                    Speak("Omlouvám se, ale termín nebyl nalezen")
 
             playsound("./audio/disabled.mp3")
             break
             #TODO: přidat možnosti
 
         elif (intent == "weather"):
-            body = resp.get("entities").get("day:day")[0].get("body")
-            url = "https://api.openweathermap.org/data/2.5/onecall?lat=%s&lon=%s&appid=%s&units=metric" % (g.lat, g.lng, "b8673c1c6075378467103fc57030a52b")    
-            response = requests.get(url)
-            data = json.loads(response.text)
+            try:
+                body = resp.get("entities").get("day:day")[0].get("body")
+                url = "https://api.openweathermap.org/data/2.5/onecall?lat=%s&lon=%s&appid=%s&units=metric" % (g.lat, g.lng, weather_key)    
+                response = requests.get(url)
+                data = json.loads(response.text)
+            except Exception as e:
+                break
 
-            if("dnes" in body):
-                expression = data.get("daily")[0].get("weather").get("main").lower()
+            if("dnes" in body): 
+                expression = data.get("daily")[0].get("weather")[0].get("main").lower()
             elif(body == "zítra"):
-                expression = data.get("daily")[1].get("weather").get("main").lower()
+                expression = data.get("daily")[1].get("weather")[0].get("main").lower()
             elif("teď" in body):
                 expression = data.get("current").get("weather")[0].get("main").lower()
 
@@ -178,10 +227,6 @@ def main():
 
             break
 
-        elif (intent == "reminders"):
-            Speak("Na dnes je jediný plán, dej si pořádnýho bonga a rozjebej se ty sračko")
-            playsound("./audio/bong.mp3")
-
         elif (intent == "light"):
             body = resp.get("entities").get("state:state")[0].get("body")
             if (body.lower() == "zapni"):
@@ -203,15 +248,59 @@ def main():
 
         elif (intent == "time"):
             Speak("Je "+str(datetime.now().hour)+"hodin a "+str(datetime.now().minute) + "minut")
-
-        elif (intent == "spotify"):
-            print("")
+            break
 
         elif (intent == "joke"):
-            print("")
+            url = "https://vtipy.atropin.cz/1--vtipy--nahodny-vtip"
+            page = requests.get(url)
+            content = page.content
+            soup = BeautifulSoup(content)
+            div = soup.findAll("div", {"class": "content"})
+            vtip = div[0].findAll("p")
+            Speak(vtip[3].getText())
+            break
 
         elif (intent == "news"):
-            print("")
+            url = "https://www.novinky.cz/zahranicni/svet"
+            page = requests.get(url)
+            content = page.content
+            soup = BeautifulSoup(content)
+            headers = soup.findAll("h3", {'data-dot-data': '{"component":"mol-feed-item-title","action":"mol-feed-item-title-click"}'})
+            titulky = ""
+            for header in headers:
+                if ("ON-LINE: " in header.getText()):
+                    titulky += header.getText().replace("ON-LINE: ", "") + "\n"
+                else:
+                    titulky += header.getText() + "\n"
+
+            Speak(titulky)
+            break
+
+        elif (intent == "covid"):
+            body = resp.get("entities").get("day:day")[0].get("body")
+            url = "https://onemocneni-aktualne.mzcr.cz/api/v2/covid-19/nakaza.min.json"
+            r = requests.get(url)
+            data = r.json()["data"]
+            today = datetime.today()
+            _today = today.strftime("%Y-%m-%d")
+            yesterday = datetime.today() - timedelta(days=1)
+            _yesterday = yesterday.strftime("%Y-%m-%d")
+            
+            #print(data[len(data)-1]["prirustkovy_pocet_nakazenych"])
+
+            if ("dnes" in body or "dnešek" in body or "dneska" in body):
+                if (data[len(data)-1]["datum"] == _today):
+                    Speak("Za dnešní den přibylo" + str(data[len(data)-1]["prirustkovy_pocet_nakazenych"]) + " nakažených")
+                else: 
+                    Speak("Pro dnešní datum není známý přírustkový počet")
+                
+            elif ("včera" in body or "včerejšek" in body):
+                if (data[len(data)-1]["datum"] == _yesterday):
+                    Speak("Za včerejší den přibylo " + str(data[len(data)-1]["prirustkovy_pocet_nakazenych"]) + " nakažených")
+                else: 
+                    Speak("Pro včerejší datum není známý přírustkový počet")
+
+            break
 
 
 def detected_callback():
